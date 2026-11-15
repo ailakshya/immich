@@ -32,6 +32,8 @@ class BackupAlbumSelectionPage extends ConsumerStatefulWidget {
 }
 
 class _BackupAlbumSelectionPageState extends ConsumerState<BackupAlbumSelectionPage> {
+  bool _popping = false;
+
   String _searchQuery = '';
   bool _isSearchMode = false;
   int _initialTotalAssetCount = 0;
@@ -99,7 +101,8 @@ class _BackupAlbumSelectionPageState extends ConsumerState<BackupAlbumSelectionP
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
-        if (!didPop) {
+        if (!didPop && !_popping) {
+          _popping = true;
           await _handlePagePopped();
           if (!mounted) {
             return;

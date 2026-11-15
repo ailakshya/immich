@@ -6,5 +6,6 @@ struct ImmichWidgetBundle: WidgetBundle {
   var body: some Widget {
     ImmichRandomWidget()
     ImmichMemoryWidget()
+    BackupLiveActivityWidget()
   }
 }

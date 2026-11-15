@@ -18,6 +18,24 @@ void main() {
     await ctx.dispose();
   });
 
+  group('getAlbumSelection', () {
+    test('returns empty lists when no albums exist', () async {
+      final result = await sut.getAlbumSelection();
+      expect(result.selected, isEmpty);
+      expect(result.excluded, isEmpty);
+    });
+
+    test('splits selected and excluded albums and leaves out the rest', () async {
+      final selected = await ctx.newLocalAlbum(backupSelection: BackupSelection.selected);
+      final excluded = await ctx.newLocalAlbum(backupSelection: BackupSelection.excluded);
+      await ctx.newLocalAlbum(backupSelection: BackupSelection.none);
+
+      final result = await sut.getAlbumSelection();
+      expect(result.selected, [selected.id]);
+      expect(result.excluded, [excluded.id]);
+    });
+  });
+
   group('getAllCounts', () {
     late String userId;
 

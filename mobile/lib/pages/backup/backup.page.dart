@@ -19,9 +19,11 @@ import 'package:immich_mobile/providers/permission.provider.dart';
 import 'package:immich_mobile/providers/sync_status.provider.dart';
 import 'package:immich_mobile/providers/user.provider.dart';
 import 'package:immich_mobile/routing/router.dart';
+import 'package:immich_mobile/utils/bytes_units.dart';
 import 'package:immich_mobile/widgets/backup/backup_info_card.dart';
 import 'package:immich_ui/immich_ui.dart';
 import 'package:logging/logging.dart';
+import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -136,6 +138,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   const _TotalCard(),
                   const _BackupCard(),
                   const _RemainderCard(),
+                  const _SpeedCard(),
+                  const _NowUploadingCard(),
                   const Divider(),
                   BackupToggleButton(
                     onStart: () async => await startBackup(),
@@ -425,6 +429,57 @@ class _TotalCard extends ConsumerWidget {
       title: context.t.total,
       subtitle: context.t.backup_controller_page_total_sub,
       info: totalCount.toString(),
+    );
+  }
+}
+
+/// The file currently uploading (foreground only); tap for the full per-file list.
+class _NowUploadingCard extends ConsumerWidget {
+  const _NowUploadingCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final uploading = ref
+        .watch(backupProvider.select((s) => s.uploadItems))
+        .values
+        .where((item) => item.progress < 1.0 && item.isFailed != true)
+        .toList();
+    if (uploading.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final item = uploading.first;
+    final more = uploading.length > 1 ? ' • +${uploading.length - 1} more' : '';
+
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.cloud_upload_outlined),
+        title: Text(path.basename(item.filename), maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 6),
+            LinearProgressIndicator(value: item.progress),
+            const SizedBox(height: 4),
+            Text('${formatHumanReadableBytes(item.fileSize, 1)} • ${item.networkSpeedAsString}$more'),
+          ],
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => context.pushRoute(const UploadDetailRoute()),
+      ),
+    );
+  }
+}
+
+class _SpeedCard extends ConsumerWidget {
+  const _SpeedCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ValueListenableBuilder<String>(
+      valueListenable: ref.watch(backupProvider.notifier).speedText,
+      builder: (context, speed, _) => speed.isEmpty
+          ? const SizedBox.shrink()
+          : BackupInfoCard(title: 'Upload speed', subtitle: 'Average over the last 30 seconds', info: speed),
     );
   }
 }

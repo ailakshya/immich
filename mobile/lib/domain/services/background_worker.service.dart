@@ -102,7 +102,8 @@ class BackgroundWorkerBgService extends BackgroundWorkerFlutterApi {
           FileDownloader().configure(
             globalConfig: [
               // maxConcurrent: 6, maxConcurrentByHost(server):6, maxConcurrentByGroup: 3
-              (Config.holdingQueue, (6, 6, 3)),
+              // iOS: see main.dart, a suspended app cannot release held tasks
+              (Config.holdingQueue, CurrentPlatform.isIOS ? Config.never : (6, 6, 3)),
               // On Android, if files are larger than 256MB, run in foreground service
               (Config.runInForegroundIfFileLargerThan, 256),
             ],

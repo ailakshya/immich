@@ -220,7 +220,23 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
 
   Future<void> _performPause() {
     if (_ref.read(authProvider).isAuthenticated) {
-      _ref.read(backupProvider.notifier).stopForegroundBackup(reason: "the app being sent to the background");
+      final backupNotifier = _ref.read(backupProvider.notifier);
+
+      // iOS: hand the rest to the background URLSession so uploads keep going while locked. Started before
+      // stopping the foreground run so the lock-screen activity never flashes "paused" in between.
+      try {
+        final currentUser = CurrentPlatform.isIOS ? Store.tryGet(StoreKey.currentUser) : null;
+        if (currentUser != null && _ref.read(appConfigProvider).backup.enabled) {
+          unawaited(
+            backupNotifier
+                .continueInBackground(currentUser.id)
+                .catchError((Object e, StackTrace s) => _log.warning("continueInBackground failed", e, s)),
+          );
+        }
+      } catch (e, s) {
+        _log.warning("Background handoff skipped", e, s); // never block the rest of the pause cleanup
+      }
+      backupNotifier.stopForegroundBackup(reason: "the app being sent to the background");
 
       _ref.read(websocketProvider.notifier).disconnect();
     }

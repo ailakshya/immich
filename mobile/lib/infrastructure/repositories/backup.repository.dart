@@ -27,6 +27,24 @@ class BackupRepository extends DatabaseAccessor<Drift> with $BackupRepositoryMix
       ..where(_db.localAlbumEntity.backupSelection.equalsValue(BackupSelection.excluded));
   }
 
+  /// Ids of the albums selected for backup and of those excluded from it.
+  Future<({List<String> selected, List<String> excluded})> getAlbumSelection() async {
+    final rows =
+        await (_db.localAlbumEntity.select()
+              ..where((a) => a.backupSelection.isInValues([BackupSelection.selected, BackupSelection.excluded])))
+            .get();
+    return (
+      selected: [
+        for (final a in rows)
+          if (a.backupSelection == BackupSelection.selected) a.id,
+      ],
+      excluded: [
+        for (final a in rows)
+          if (a.backupSelection == BackupSelection.excluded) a.id,
+      ],
+    );
+  }
+
   /// Returns all backup-related counts in a single query.
   ///
   /// - total:     number of distinct assets in selected albums, excluding those that are also in excluded albums

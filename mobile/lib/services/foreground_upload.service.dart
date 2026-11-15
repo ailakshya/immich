@@ -88,22 +88,35 @@ class ForegroundUploadService {
     Completer<void> cancelToken, {
     UploadCallbacks callbacks = const UploadCallbacks(),
     bool useSequentialUpload = false,
+    Set<String> skipAssetIds = const {},
   }) async {
-    final candidates = await _backupRepository.getCandidates(userId);
+    // [skipAssetIds]: assets the iOS background session is still uploading. Skip them, and keep the shared
+    // temp dir (the queued tasks read their files from it).
+    final candidates = (await _backupRepository.getCandidates(
+      userId,
+    )).where((asset) => !skipAssetIds.contains(asset.id)).toList();
     if (candidates.isEmpty) {
       return;
     }
+    final clearCache = skipAssetIds.isEmpty;
 
     final networkCapabilities = await _connectivityApi.getCapabilities();
     final hasWifi = networkCapabilities.isUnmetered;
     _logger.info('Network capabilities: $networkCapabilities, hasWifi/isUnmetered: $hasWifi');
 
     if (useSequentialUpload) {
-      await _uploadSequentially(items: candidates, cancelToken: cancelToken, hasWifi: hasWifi, callbacks: callbacks);
+      await _uploadSequentially(
+        items: candidates,
+        cancelToken: cancelToken,
+        hasWifi: hasWifi,
+        callbacks: callbacks,
+        clearCache: clearCache,
+      );
     } else {
       await _executeWithWorkerPool<LocalAsset>(
         items: candidates,
         cancelToken: cancelToken,
+        clearCache: clearCache,
         shouldSkip: (asset) {
           final requireWifi = _shouldRequireWiFi(asset);
           return requireWifi && !hasWifi;
@@ -119,8 +132,11 @@ class ForegroundUploadService {
     required Completer<void> cancelToken,
     required bool hasWifi,
     required UploadCallbacks callbacks,
+    bool clearCache = true,
   }) async {
-    await _storageRepository.clearCache();
+    if (clearCache) {
+      await _storageRepository.clearCache();
+    }
     shouldAbortUpload = false;
 
     for (final asset in items) {
@@ -206,8 +222,11 @@ class ForegroundUploadService {
     required Future<void> Function(T item) processItem,
     bool Function(T item)? shouldSkip,
     int concurrentWorkers = 3,
+    bool clearCache = true,
   }) async {
-    await _storageRepository.clearCache();
+    if (clearCache) {
+      await _storageRepository.clearCache();
+    }
     shouldAbortUpload = false;
 
     int currentIndex = 0;

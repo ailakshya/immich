@@ -25,5 +25,9 @@ IMMICH_BUNDLE_ID_DEV = app.futo.immich
 // Build scheme suffixes (`.debug`/`.profile`) will be appended
 IMMICH_GROUP_ID = group.app.immich.share
 
+// Base URL of the server the Photos background-upload extension uploads to (iOS checks job destinations
+// against it). xcconfig treats "//" as a comment, so write e.g. https:/$()/immich.example.com
+IMMICH_UPLOAD_URL_BASE =
+
 // Optional per-developer configuration override
 #include? "Signing.local.xcconfig"

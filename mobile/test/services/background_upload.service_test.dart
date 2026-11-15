@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -72,6 +73,94 @@ void main() {
 
   tearDown(() {
     sut.dispose();
+  });
+
+  group('uploadBackupCandidates', () {
+    late List<List<UploadTask>> enqueued;
+
+    setUp(() {
+      registerFallbackValue(LocalAssetStub.image1);
+      registerFallbackValue(<UploadTask>[]);
+      enqueued = [];
+      final entity = MockAssetEntity();
+      when(() => entity.isLivePhoto).thenReturn(false);
+      final file = File('${Directory.systemTemp.createTempSync('bg').path}/a.jpg')
+        ..writeAsBytesSync(List.filled(1000, 0));
+      when(() => mockStorageRepository.getAssetEntityForAsset(any())).thenAnswer((_) async => entity);
+      when(() => mockStorageRepository.getFileForAsset(any())).thenAnswer((_) async => file);
+      when(() => mockAssetMediaRepository.getOriginalFilename(any())).thenAnswer((_) async => null);
+      when(() => mockUploadRepository.enqueueBackgroundAll(any())).thenAnswer((invocation) async {
+        final tasks = invocation.positionalArguments.first as List<UploadTask>;
+        enqueued.add(tasks);
+        return List.filled(tasks.length, true);
+      });
+      when(
+        () => mockBackupRepository.getCandidates(any()),
+      ).thenAnswer((_) async => [for (var i = 0; i < 130; i++) LocalAssetStub.image1.copyWith(id: 'asset-$i')]);
+    });
+
+    test('enqueues in chunks of 50 up to the batch size', () async {
+      final reported = <String>[];
+      await sut.uploadBackupCandidates('user', batchSize: 120, clearCache: false, onEnqueued: reported.addAll);
+
+      expect(enqueued.map((chunk) => chunk.length), [50, 50, 20]);
+      expect(reported.length, 120); // every enqueued chunk is reported
+    });
+
+    test('cancel waits for an in-flight batch before deleting temp files', () async {
+      final release = Completer<void>();
+      when(() => mockUploadRepository.enqueueBackgroundAll(any())).thenAnswer((invocation) async {
+        await release.future;
+        return [true];
+      });
+      when(() => mockUploadRepository.reset(any())).thenAnswer((_) async => 0);
+      when(() => mockUploadRepository.deleteDatabaseRecords(any())).thenAnswer((_) async {});
+      when(() => mockUploadRepository.getActiveTasks(any())).thenAnswer((_) async => []);
+      when(() => mockStorageRepository.clearCache()).thenAnswer((_) async {});
+
+      final batch = sut.uploadBackupCandidates('user', batchSize: 1, clearCache: false);
+      await pumpEventQueue();
+      final cancel = sut.cancel();
+      await pumpEventQueue();
+      verifyNever(() => mockStorageRepository.clearCache());
+
+      release.complete();
+      await batch;
+      await cancel;
+      verify(() => mockStorageRepository.clearCache()).called(1);
+    });
+
+    test('does not enqueue a task whose temp file is gone', () async {
+      when(() => mockStorageRepository.getFileForAsset(any())).thenAnswer((_) async => File('/nonexistent/x.jpg'));
+
+      await sut.uploadBackupCandidates('user', batchSize: 3, clearCache: false);
+
+      expect(enqueued, isEmpty);
+    });
+
+    test('uses prepared candidates without querying the database', () async {
+      final prepared = [for (var i = 0; i < 3; i++) LocalAssetStub.image1.copyWith(id: 'prepared-$i')];
+
+      await sut.uploadBackupCandidates('user', batchSize: 2, clearCache: false, candidates: prepared);
+
+      verifyNever(() => mockBackupRepository.getCandidates(any()));
+      final ids = enqueued.single.map((task) => jsonDecode(task.metaData)['localAssetId']).toList();
+      expect(ids, ['prepared-0', 'prepared-1']);
+    });
+
+    test('leaves out assets that are still queued', () async {
+      await sut.uploadBackupCandidates('user', batchSize: 2, clearCache: false, skipAssetIds: {'asset-0', 'asset-1'});
+
+      final ids = enqueued.single.map((task) => jsonDecode(task.metaData)['localAssetId']).toList();
+      expect(ids, ['asset-2', 'asset-3']);
+    });
+
+    test('stops once the exported bytes reach maxBytes and takes from the end with fromEnd', () async {
+      await sut.uploadBackupCandidates('user', batchSize: 500, fromEnd: true, clearCache: false, maxBytes: 2500);
+
+      expect(enqueued.single.length, 3); // 1000-byte files: 0, 1000, 2000 < 2500
+      expect(jsonDecode(enqueued.single.first.metaData)['localAssetId'], 'asset-129');
+    });
   });
 
   group('getUploadTask', () {

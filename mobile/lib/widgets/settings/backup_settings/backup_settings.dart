@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/config/app_config.dart';
@@ -32,6 +33,7 @@ class BackupSettings extends StatelessWidget {
           const _BackupOnlyWhenChargingButton(),
           const _BackupDelaySlider(),
         ],
+        if (CurrentPlatform.isIOS) ...[const Divider(), const _LockScreenProgressSwitch()],
         const Divider(),
         SettingGroupTitle(title: context.t.backup_albums_sync, icon: Icons.sync),
         const _AlbumSyncActionButton(),
@@ -283,6 +285,49 @@ class _BackupDelaySlider extends ConsumerWidget {
           label: formatBackupDelaySliderValue(context, currentValue),
         ),
       ],
+    );
+  }
+}
+
+/// iOS: show backup progress as a Live Activity on the lock screen and in the Dynamic Island.
+/// ponytail: stored natively (BackupLiveActivity.swift) rather than in the app config, which needs a migration;
+/// English-only text until it gets translation keys.
+class _LockScreenProgressSwitch extends StatefulWidget {
+  const _LockScreenProgressSwitch();
+
+  @override
+  State<_LockScreenProgressSwitch> createState() => _LockScreenProgressSwitchState();
+}
+
+class _LockScreenProgressSwitchState extends State<_LockScreenProgressSwitch> {
+  static const _channel = MethodChannel('immich/backup_live_activity');
+  bool _enabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(
+      _channel
+          .invokeMethod<bool>('isEnabled')
+          .then((value) {
+            if (mounted) {
+              setState(() => _enabled = value ?? true);
+            }
+          })
+          .catchError((_) {}),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile.adaptive(
+      value: _enabled,
+      title: const Text('Progress on Lock Screen'),
+      subtitle: const Text('Show backup progress on the Lock Screen and in the Dynamic Island'),
+      onChanged: (value) {
+        setState(() => _enabled = value);
+        unawaited(_channel.invokeMethod('setEnabled', value).catchError((_) => null));
+      },
     );
   }
 }

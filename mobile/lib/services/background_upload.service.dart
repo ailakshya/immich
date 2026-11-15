@@ -148,46 +148,145 @@ class BackgroundUploadService {
   ///
   /// Finds backup candidates, builds upload tasks, and enqueues them
   /// for background processing.
-  Future<void> uploadBackupCandidates(String userId) async {
-    await _storageRepository.clearCache();
+  /// [fromEnd]: take the batch from the end of the candidate list, so it does not overlap a foreground run
+  /// working from the front. [clearCache] must be false while a foreground run has temp files in flight.
+  /// [skipAssetIds] are left out (already queued). [maxBytes] caps the exported temp copies; tasks are enqueued every 50, so a lock part-way through
+  /// still leaves the earlier chunks queued from the foreground. [exportPause] spaces the exports out and
+  /// [onEnqueued] reports each enqueued chunk's asset ids.
+  Future<void> uploadBackupCandidates(
+    String userId, {
+    int batchSize = 100,
+    bool fromEnd = false,
+    bool clearCache = true,
+    int? maxBytes,
+    Set<String> skipAssetIds = const {},
+    List<LocalAsset>? candidates,
+    Duration exportPause = Duration.zero,
+    void Function(Iterable<String> assetIds)? onEnqueued,
+  }) async {
+    // One batch at a time: a second call would clear the temp dir (and reset the abort flag) while the first
+    // is still exporting and enqueueing, and NSURLSession aborts the app on a task whose file is gone.
+    while (_queueing != null) {
+      await _queueing;
+    }
+    final queueing = Completer<void>();
+    _queueing = queueing.future;
+    try {
+      await _uploadBackupCandidates(
+        userId,
+        batchSize: batchSize,
+        fromEnd: fromEnd,
+        clearCache: clearCache,
+        maxBytes: maxBytes,
+        skipAssetIds: skipAssetIds,
+        candidates: candidates,
+        exportPause: exportPause,
+        onEnqueued: onEnqueued,
+      );
+    } finally {
+      _queueing = null;
+      queueing.complete();
+    }
+  }
+
+  /// Backup candidates, for preparing a later background batch while still in the foreground.
+  Future<List<LocalAsset>> getBackupCandidates(String userId) => _backupRepository.getCandidates(userId);
+
+  Future<({List<String> selected, List<String> excluded})> getAlbumSelection() => _backupRepository.getAlbumSelection();
+
+  /// The batch currently being exported and enqueued, if any.
+  Future<void>? _queueing;
+
+  Future<void> _uploadBackupCandidates(
+    String userId, {
+    required int batchSize,
+    required bool fromEnd,
+    required bool clearCache,
+    required int? maxBytes,
+    required Set<String> skipAssetIds,
+    required List<LocalAsset>? candidates,
+    required Duration exportPause,
+    required void Function(Iterable<String> assetIds)? onEnqueued,
+  }) async {
+    if (clearCache) {
+      await _storageRepository.clearCache();
+    }
     shouldAbortQueuingTasks = false;
 
-    final candidates = await _backupRepository.getCandidates(userId);
-    if (candidates.isEmpty) {
+    // [skipAssetIds]: assets still queued in the session; they stay candidates until the server has them.
+    // [candidates]: a list prepared in the foreground; querying the database from a short background wake
+    // can take longer than iOS allows.
+    final source = candidates ?? await _backupRepository.getCandidates(userId);
+    final pending = source.where((asset) => !skipAssetIds.contains(asset.id)).toList();
+    if (pending.isEmpty) {
       _logger.info("No new backup candidates found, finishing background upload");
       return;
     }
 
-    _logger.info("Found ${candidates.length} backup candidates for background tasks");
+    _logger.info("Found ${pending.length} backup candidates for background tasks");
 
-    const batchSize = 100;
-    final batch = candidates.take(batchSize).toList();
     final List<UploadTask> tasks = [];
+    Future<void> enqueuePending() async {
+      // Last line of defence: never hand NSURLSession a task whose temp file has disappeared (it throws an
+      // Objective-C exception and aborts the app).
+      final ready = [
+        for (final task in tasks)
+          if (File(await task.filePath()).existsSync()) task,
+      ];
+      if (ready.length < tasks.length) {
+        _logger.warning("Skipped ${tasks.length - ready.length} upload tasks whose temp file is gone");
+      }
+      if (ready.isNotEmpty && !shouldAbortQueuingTasks) {
+        _logger.info("Enqueuing ${ready.length} background upload tasks");
+        await enqueueTasks(ready);
+        onEnqueued?.call(ready.map((task) => UploadTaskMetadata.fromJson(task.metaData).localAssetId));
+      }
+      tasks.clear();
+    }
 
-    for (final asset in batch) {
+    var count = 0;
+    var bytes = 0;
+    for (final asset in fromEnd ? pending.reversed : pending) {
+      if (count >= batchSize || (maxBytes != null && bytes >= maxBytes) || shouldAbortQueuingTasks) {
+        break;
+      }
       final task = await getUploadTask(asset);
-      if (task != null) {
-        tasks.add(task);
+      if (task == null) {
+        continue;
+      }
+      tasks.add(task);
+      count++;
+      if (maxBytes != null) {
+        bytes += await File(await task.filePath()).length().catchError((_) => 0);
+      }
+      if (tasks.length >= 50) {
+        await enqueuePending();
+      }
+      if (exportPause > Duration.zero) {
+        await Future<void>.delayed(exportPause); // leave disk and database to the app between exports
       }
     }
-
-    if (tasks.isNotEmpty && !shouldAbortQueuingTasks) {
-      _logger.info("Enqueuing ${tasks.length} background upload tasks");
-      await enqueueTasks(tasks);
-    }
+    await enqueuePending();
   }
 
   /// Cancel all ongoing background uploads and reset the upload queue
   ///
   /// Returns the number of tasks left in the queue
   Future<int> cancel() async {
+    final stopwatch = Stopwatch()..start();
+    void step(String name) => _logger.info("cancel: $name after ${stopwatch.elapsedMilliseconds} ms");
     shouldAbortQueuingTasks = true;
-
-    await _storageRepository.clearCache();
+    await _queueing; // let an in-flight batch stop before its files are deleted
+    step("in-flight batch stopped");
+    // Drop the queue before its files: a task still queued for a deleted temp file makes
+    // NSURLSession throw in uploadTask(with:fromFile:) and aborts the app.
     await _uploadRepository.reset(kBackupGroup);
     await _uploadRepository.deleteDatabaseRecords(kBackupGroup);
     await _uploadRepository.reset(kBackupLivePhotoGroup);
     await _uploadRepository.deleteDatabaseRecords(kBackupLivePhotoGroup);
+    step("queue reset");
+    await _storageRepository.clearCache();
+    step("temp files cleared");
 
     final activeTasks = await _uploadRepository.getActiveTasks(kBackupGroup);
     return activeTasks.length;

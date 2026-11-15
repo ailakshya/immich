@@ -23,6 +23,10 @@ class RemoteAlbumRepository extends DatabaseAccessor<Drift> with $RemoteAlbumRep
 
   Drift get _db => attachedDatabase;
 
+  Stream<void> watchChanges() {
+    return _db.tableUpdates(TableUpdateQuery.onAllTables([_db.remoteAlbumEntity, _db.remoteAlbumUserEntity]));
+  }
+
   Future<List<RemoteAlbum>> getAll({Set<SortRemoteAlbumsBy> sortBy = const {SortRemoteAlbumsBy.updatedAt}}) {
     // Count non-trashed assets via the joined asset table. Filtering trashed assets in the
     // join condition (instead of the where clause) keeps albums whose assets are all trashed

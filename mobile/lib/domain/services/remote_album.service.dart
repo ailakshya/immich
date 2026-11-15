@@ -55,6 +55,8 @@ class RemoteAlbumService {
     return _repository.watchAlbum(albumId);
   }
 
+  Stream<void> watchChanges() => _repository.watchChanges();
+
   Future<List<RemoteAlbum>> getAll() {
     return _repository.getAll();
   }

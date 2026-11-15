@@ -37,6 +37,8 @@ class RemoteAlbumNotifier extends Notifier<RemoteAlbumState> {
   @override
   RemoteAlbumState build() {
     _remoteAlbumService = ref.read(remoteAlbumServiceProvider);
+    final subscription = _remoteAlbumService.watchChanges().listen((_) => unawaited(refresh().catchError((_) {})));
+    ref.onDispose(subscription.cancel);
     return const RemoteAlbumState(albums: []);
   }
 

@@ -62,6 +62,7 @@ class _AlbumSelectorState extends ConsumerState<AlbumSelector> {
         isGrid = albumConfig.isGrid;
       });
 
+      unawaited(sortAlbums());
       unawaited(ref.read(remoteAlbumProvider.notifier).refresh());
     });
 

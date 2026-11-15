@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/domain/utils/background_sync.dart';
+import 'package:immich_mobile/providers/app_life_cycle.provider.dart';
 import 'package:immich_mobile/providers/backup/backup.provider.dart';
 import 'package:immich_mobile/providers/sync_status.provider.dart';
 
@@ -20,7 +22,7 @@ final backgroundSyncProvider = Provider<BackgroundSyncManager>((ref) {
       // ignore: dispose-provided-instances
       final backupNotifier = ref.read(backupProvider.notifier);
       if (backupNotifier.mounted) {
-        backupNotifier.updateError(isSuccess == true ? BackupError.none : BackupError.syncFailed);
+        backupNotifier.updateError(remoteSyncBackupError(isSuccess, ref.read(appStateProvider)));
       }
     },
     onRemoteSyncError: syncStatusNotifier.errorRemoteSync,
@@ -37,3 +39,9 @@ final backgroundSyncProvider = Provider<BackgroundSyncManager>((ref) {
   ref.onDispose(manager.cancel);
   return manager;
 });
+
+@visibleForTesting
+BackupError remoteSyncBackupError(bool? isSuccess, AppLifeCycleEnum appState) {
+  const backgroundStates = {AppLifeCycleEnum.paused, AppLifeCycleEnum.detached, AppLifeCycleEnum.hidden};
+  return isSuccess == true || backgroundStates.contains(appState) ? BackupError.none : BackupError.syncFailed;
+}

@@ -137,7 +137,10 @@ class _Executor extends Mixinable<_Executor> with _ExecutorLogger {
       final freeWorker = _pool.firstWhereOrNull(
         (worker) => worker.taskId == null && !worker.initialized && !worker.initializing,
       );
-      await freeWorker?.initialize();
+      if (freeWorker == null) {
+        return;
+      }
+      await freeWorker.initialize();
       _schedule();
     }
   }

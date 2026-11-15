@@ -20,4 +20,14 @@ void main() {
       reason: 'the worker must finish and return its result, not be killed mid-task',
     );
   });
+
+  test('a task queued while the only worker is still spawning does not livelock', () async {
+    await workerManagerPatch.dispose();
+    await workerManagerPatch.init(isolatesCount: 1, dynamicSpawning: true);
+
+    final first = workerManagerPatch.executeGentle((_) async => 1);
+    final second = workerManagerPatch.executeGentle((_) async => 2);
+
+    expect(await Future.wait([first, second]).timeout(const Duration(seconds: 10)), [1, 2]);
+  });
 }
